@@ -1,0 +1,201 @@
+// Prisma schema for the Internal Tool Platform
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum WorkspaceRole {
+  WORKSPACE_OWNER
+  ADMIN
+  BUILDER
+  MEMBER
+  VIEWER
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXPORT
+  IMPORT
+  LOGIN
+  LOGOUT
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ─── Workspaces (Tenant isolation) ──────────────────────────────────────────
+
+model Workspace {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  plan        String   @default("free")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       WorkspaceUser[]
+  tools       Tool[]
+  files       File[]
+  auditLogs   AuditLog[]
+  apiKeys     ApiKey[]
+
+  @@map("workspaces")
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  passwordHash    String
+  firstName       String?
+  lastName        String?
+  isActive        Boolean  @default(true)
+  lastLoginAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  workspaces      WorkspaceUser[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+// ─── Workspace Users (Role assignments) ──────────────────────────────────────
+
+model WorkspaceUser {
+  id          String         @id @default(uuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole  @default(MEMBER)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_users")
+}
+
+// ─── Tools (Schema definitions) ──────────────────────────────────────────────
+
+model Tool {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String?
+  schema      Json
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  records     ToolRecord[]
+
+  @@unique([workspaceId, slug])
+  @@map("tools")
+}
+
+// ─── Tool Records (Dynamic data - JSONB) ─────────────────────────────────────
+
+model ToolRecord {
+  id          String   @id @default(uuid())
+  toolId      String
+  workspaceId String
+  data        Json
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tool        Tool     @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@index([toolId])
+  @@index([workspaceId])
+  @@map("tool_records")
+}
+
+// ─── Files (S3/R2 metadata) ───────────────────────────────────────────────────
+
+model File {
+  id          String   @id @default(uuid())
+  workspaceId String
+  toolId      String?
+  recordId    String?
+  fileName    String
+  fileKey     String   @unique
+  contentType String
+  sizeBytes   Int
+  url         String?
+  uploadedById String?
+  createdAt   DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([toolId])
+  @@map("files")
+}
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  workspaceId String
+  userId      String?
+  action      AuditAction
+  resource    String
+  resourceId  String?
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User?       @relation(fields: [userId], references: [id])
+
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─── API Keys ──────────────────────────────────────────────────────────────────
+
+model ApiKey {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  keyHash     String   @unique
+  keyPrefix   String
+  scopes      String[]
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean  @default(true)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@map("api_keys")
+}
